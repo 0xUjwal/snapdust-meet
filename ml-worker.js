@@ -129,11 +129,14 @@ self.onmessage = async (ev) => {
             }
             const img = new ImageData(w, h);
             const px = img.data;
+            let personPx = 0;
             for (let i = 0; i < cur.length; i++) {
               const o = i * 4;
               px[o] = 255; px[o + 1] = 255; px[o + 2] = 255;
               px[o + 3] = cur[i] === 0 ? 255 : 0; // category 0 = person (verified visually); non-zero = background
+              if (cur[i] === 0) personPx++;
             }
+            out.coverage = personPx / cur.length;
             const oc = new OffscreenCanvas(w, h);
             oc.getContext('2d').putImageData(img, 0, 0);
             out.mask = oc.transferToImageBitmap();
