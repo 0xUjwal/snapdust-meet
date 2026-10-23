@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SnapDust for Google Meet",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Snap your fingers on camera to crumble into dust and mute. Snap again to reassemble and unmute.",
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
