@@ -50,6 +50,8 @@
   let extDead = false;
   let failStreak = 0;
   let initTimer = null;
+  let initBackoff = 4000;
+  let settledCameraOnly = false;
   // Frame ids are namespaced per tab so two Meet tabs sharing one offscreen
   // document can never collide in its pending map.
   const tabToken = Math.random().toString(36).slice(2, 10);
@@ -77,7 +79,7 @@
     }
   }
   function ensureWorker() {
-    if (workerReady) return;
+    if (workerReady || settledCameraOnly || extDead) return;
     setPill('SnapDust starting...', 'busy');
     // Ask the service worker to create the offscreen ML document; readiness
     // arrives separately as an ml-ready broadcast once models have loaded.
@@ -90,10 +92,20 @@
         if (!extDead) {
           const why = String((err && (err.message || err)) || (resp && resp.error) || 'unknown');
           LOG('ML host start failed:', why);
-          setPill('SnapDust restarting...', 'busy');
           if (pill) pill.title = 'Last startup error: ' + why;
-          // Never park on a dead error: retry until the runtime comes up.
-          if (!initTimer) initTimer = setTimeout(() => { initTimer = null; ensureWorker(); }, 4000);
+          if (why.includes('budget exhausted')) {
+            // The SW refuses further rebuilds: settle into a stable,
+            // usable camera-only state instead of churning.
+            settledCameraOnly = true;
+            setPill('SnapDust: camera only (effects unavailable)', 'err');
+            window.postMessage({ __snapdust: true, type: 'ml-dead' }, location.origin);
+            return;
+          }
+          setPill('SnapDust restarting...', 'busy');
+          // Bounded exponential backoff (4s..30s cap): retries are cheap
+          // (one message per interval) but never tight-loop.
+          if (!initTimer) initTimer = setTimeout(() => { initTimer = null; ensureWorker(); }, initBackoff);
+          initBackoff = Math.min(30000, initBackoff * 2);
         }
       }
     });

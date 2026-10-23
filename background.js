@@ -7,7 +7,17 @@ console.log('[SnapDust SW] boot');
 
 let restarts = 0;
 let restartWindowStart = 0;
+// Shared recreate budget: crash loops must not churn forever. At most 5
+// offscreen recreations per 10 minutes across ALL paths.
+let recreateTimes = [];
+function recreateBudgetOk() {
+  const now = Date.now();
+  recreateTimes = recreateTimes.filter(t => now - t < 10 * 60 * 1000);
+  return recreateTimes.length < 5;
+}
+function noteRecreate() { recreateTimes.push(Date.now()); }
 async function createOffscreen(forceGpu) {
+  noteRecreate();
   const url = forceGpu ? 'offscreen.html?gpu=1' : 'offscreen.html';
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -61,11 +71,14 @@ async function ensureOffscreen(forceGpu) {
         return { ok: true, reused: true, ready: !!pong.ready, delegate: pong.delegate || null };
       }
     } else {
-      // Document missing its message loop or ML declared dead: rebuild fresh.
+      // Document missing its message loop or ML declared dead: rebuild fresh
+      // while the shared budget lasts; otherwise the page stays camera-only.
+      if (!recreateBudgetOk()) return { ok: false, error: 'restart budget exhausted - camera only' };
       console.log('[SnapDust SW] offscreen unhealthy, recreating', pong);
       try { await chrome.offscreen.closeDocument(); } catch (e) {}
     }
   }
+  if (!recreateBudgetOk()) return { ok: false, error: 'restart budget exhausted - camera only' };
   await createOffscreen(forceGpu);
   return { ok: true, reused: false };
 }
