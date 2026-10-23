@@ -599,6 +599,11 @@
   }
 
   const pipeline = new Pipeline();
+  // Gesture detection defaults OFF (manual mode). The user opts into
+  // experimental auto-snap via the pill chip; the choice persists.
+  pipeline.gestureEnabled = false;
+  try { pipeline.gestureEnabled = localStorage.getItem('__sd_gesture') === '1'; } catch (e) {}
+  post({ type: 'gesture-state', on: pipeline.gestureEnabled });
 
   /* ---------------- messages from the isolated content script ---------------- */
   window.addEventListener('message', (ev) => {
@@ -607,7 +612,7 @@
     if (d.type === 'ml-result') {
       pipeline.busy = false;
       if (d.mask || d.hands) pipeline.lastResultAt = performance.now();
-      pipeline.snapper.feed(d.hands, performance.now());
+      if (pipeline.gestureEnabled) pipeline.snapper.feed(d.hands, performance.now());
       if (d.mask && !pipeline.testMode) {
         if (pipeline.maskBitmap && pipeline.maskBitmap.close) pipeline.maskBitmap.close();
         pipeline.maskBitmap = d.mask;
@@ -626,6 +631,11 @@
       }
     } else if (d.type === 'ml-alive') {
       if (pipeline.rawMode) { pipeline.rawMode = false; postFx('ready'); LOG('ML back; effects re-enabled'); }
+    } else if (d.type === 'snapdust-gesture') {
+      pipeline.gestureEnabled = !!d.on;
+      try { localStorage.setItem('__sd_gesture', d.on ? '1' : '0'); } catch (e) {}
+      LOG('gesture detection: ' + (pipeline.gestureEnabled ? 'ON (experimental)' : 'off (manual mode)'));
+      post({ type: 'gesture-state', on: pipeline.gestureEnabled });
     } else if (d.type === 'snapdust-toggle') {
       pipeline.manualToggle();
     } else if (d.type === 'snapdust-calibrate') {
