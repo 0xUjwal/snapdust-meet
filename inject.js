@@ -600,6 +600,7 @@
       if (d.mask && !pipeline.testMode) {
         if (pipeline.maskBitmap && pipeline.maskBitmap.close) pipeline.maskBitmap.close();
         pipeline.maskBitmap = d.mask;
+        if (typeof d.coverage === 'number') pipeline.lastCoverage = d.coverage;
         // The backdrop plate is frozen once captured: live background
         // refresh can bake missed-detection pixels (hair, hands, held
         // objects) into the plate as the user moves. Lighting changes are
