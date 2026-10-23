@@ -288,12 +288,12 @@
       }
       o.restore();
       if (this.state === 'ready') {
-        if (this.maskBitmap) {
-          this.renderPersonCutout();
-          o.drawImage(this.person, 0, 0);
-        } else {
-          o.drawImage(this.video, 0, 0, w, h);
-        }
+        // Normal viewing is a pure camera passthrough. Compositing the
+        // person cutout over the frozen plate here caused constant visible
+        // glitches: any live motion (sway, hand moves) misaligns with the
+        // frozen plate and shows as double-image edges and pixel blocks.
+        // The composite is only needed while the effect is active.
+        o.drawImage(this.video, 0, 0, w, h);
       } else if (this.state === 'dissolving' || this.state === 'reassembling') {
         this.stepCells();
         o.drawImage(this.remain, 0, 0);
