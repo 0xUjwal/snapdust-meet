@@ -36,12 +36,19 @@
         if (r < LOW && indexExtended) {
           this.phase = 'pinched';
           this.pinchFirst = now; this.pinchLast = now;
+          this.wristAtPinch = [p[0][0], p[0][1]];
         }
       } else {
         if (r < LOW) {
           this.pinchLast = now;
         } else if (r > HIGH) {
-          if (now - this.pinchLast < 280 && now - this.lastFire > 1500) {
+          // A real snap: brief contact (touch-and-go, not a held pinch),
+          // hand roughly stationary, quick release. Sign-language pinches
+          // and gesticulation hold longer and travel - observed to
+          // false-trigger on signing footage before these gates.
+          const brief = now - this.pinchFirst <= 400;
+          const still = Math.hypot(p[0][0] - this.wristAtPinch[0], p[0][1] - this.wristAtPinch[1]) < 0.10;
+          if (now - this.pinchLast < 280 && brief && still && now - this.lastFire > 3000) {
             this.lastFire = now;
             this.phase = 'arm';
             this.onSnap([(p[4][0] + p[12][0]) / 2, (p[4][1] + p[12][1]) / 2]);
@@ -327,7 +334,11 @@
           const y = Math.min(h - 1, r * cs + (cs >> 1));
           const i = (y * w + x) * 4;
           if (img[i + 3] > 40) {
-            const sweep = reverse ? (1 - c / cols) : (c / cols);
+            // Reference-informed sweep: top-to-bottom (head first) for both
+            // dissolve and reassemble - the face goes first and returns
+            // first, which reads as the Thanos-style effect the user
+            // pointed at. (Was a left/right sweep.)
+            const sweep = r / rows;
             cells.push({
               x: c * cs, y: r * cs, done: false,
               delay: sweep * 0.7 + Math.random() * 0.45,
