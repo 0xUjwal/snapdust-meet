@@ -198,6 +198,9 @@
       handleMic(d.action);
     } else if (d.type === 'cal-state') {
       handleCalState(d);
+    } else if (d.type === 'gesture-state') {
+      gestureOn = !!d.on;
+      renderGestureChip();
     } else if (d.type === 'fx-state') {
       if (d.state === 'gone') setPill('SnapDust: dusted', 'dust');
       else if (d.state === 'ready') setPill('SnapDust ready', 'on');
@@ -223,13 +226,42 @@
       opacity: 0.85, boxShadow: '0 1px 3px rgba(0,0,0,.4)',
       transition: 'transform .15s ease'
     });
-    pill.title = 'SnapDust: snap your fingers on camera, click this, or press Alt+S. Alt+B recaptures the backdrop.';
+    pill.title = 'SnapDust: click or press Alt+S to vanish/return. Alt+B recaptures the backdrop. Finger-snap detection is off by default - enable it with the chip below (experimental).';
     pill.addEventListener('click', () => {
       // Uncalibrated: the click starts backdrop capture. Calibrated: toggle.
       window.postMessage({ __snapdust: true, type: calibrated ? 'snapdust-toggle' : 'snapdust-calibrate' }, location.origin);
       flashPill();
     });
     document.documentElement.appendChild(pill);
+    makeGestureChip();
+  }
+  let gChip;
+  let gestureOn = false;
+  function makeGestureChip() {
+    if (gChip) return;
+    gChip = document.createElement('button');
+    gChip.id = 'snapdust-gesture-chip';
+    Object.assign(gChip.style, {
+      position: 'fixed', right: '14px', bottom: '52px', zIndex: 99999,
+      padding: '4px 10px', borderRadius: '12px', border: 'none',
+      background: '#3c4043', color: '#9aa0a6',
+      font: '500 11px Roboto, Arial, sans-serif', cursor: 'pointer',
+      opacity: 0.85, boxShadow: '0 1px 3px rgba(0,0,0,.4)'
+    });
+    renderGestureChip();
+    gChip.addEventListener('click', () => {
+      window.postMessage({ __snapdust: true, type: 'snapdust-gesture', on: !gestureOn }, location.origin);
+    });
+    document.documentElement.appendChild(gChip);
+  }
+  function renderGestureChip() {
+    if (!gChip) return;
+    gChip.textContent = gestureOn ? 'auto snap: ON (experimental)' : 'auto snap: off';
+    gChip.style.background = gestureOn ? '#5f3dc4' : '#3c4043';
+    gChip.style.color = gestureOn ? '#fff' : '#9aa0a6';
+    gChip.title = gestureOn
+      ? 'Automatic finger-snap detection is ON (experimental - fast hand gestures can trigger it). Click for manual-only mode (pill or Alt+S).'
+      : 'Manual mode: effects only via this pill or Alt+S. Click to enable experimental automatic finger-snap detection.';
   }
   function hidePreview() {
     if (previewDiv) { previewDiv.remove(); previewDiv = null; }
