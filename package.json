@@ -1,0 +1,8 @@
+{
+  "name": "snapdust-meet",
+  "version": "0.1.3",
+  "private": true,
+  "description": "Snap your fingers on camera to crumble into dust and mute. Chrome extension for Google Meet.",
+  "scripts": { "test": "node test/run.mjs real" },
+  "devDependencies": { "puppeteer-core": "*" }
+}

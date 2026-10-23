@@ -1,0 +1,86 @@
+<!doctype html><html><head><meta charset="utf-8"><title>SnapDust harness</title>
+<style>body{background:#111;color:#eee;font:13px monospace} #v{width:640px;background:#222} #log{white-space:pre-wrap;font-size:11px;color:#8f8} button{padding:8px 16px;font-size:14px}</style>
+</head><body>
+<button id="snap">simulate snap</button>
+<video id="v" autoplay muted playsinline></video>
+<canvas id="segview" width="640" height="360" style="background:#333"></canvas>
+<div id="log"></div>
+<script>
+const params=new URLSearchParams(location.search);
+const mode=params.get('mode')||'ml';
+if(params.get('gpu')==='1'){try{localStorage.setItem('__sd_force_gpu','1');}catch(e){}}else{try{localStorage.removeItem('__sd_force_gpu');}catch(e){}}
+window.__sdDebugMask=params.get('debugmask')==='1';
+window.__sdLog=[];window.__sdReady=false;window.__sdSegDone=false;
+const log=(m)=>{window.__sdLog.push(m);console.log('[harness]',m);document.getElementById('log').textContent+=m+'\n';};
+document.getElementById('snap').onclick=()=>{window.postMessage({__snapdust:true,type:'snapdust-toggle'},location.origin);log('snap posted');};
+
+async function start(){
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({video:{width:1280,height:720},audio:false});
+    document.getElementById('v').srcObject=stream;
+    log('stream ok; track label='+stream.getVideoTracks()[0].label+' readyState='+stream.getVideoTracks()[0].readyState);
+    window.__sdReady=true;
+  }catch(e){log('gUM failed: '+e);}
+  if(mode==='fx') startMaskFeed();
+  if(mode==='seg') runSeg();
+  if(params.get('double')==='1'){
+    setTimeout(async()=>{
+      try{
+        const s2=await navigator.mediaDevices.getUserMedia({video:{width:640,height:360},audio:false});
+        const v2=document.createElement('video');v2.id='v2';v2.autoplay=true;v2.muted=true;v2.playsInline=true;
+        document.body.appendChild(v2);v2.srcObject=s2;
+        log('second stream ok; track label='+s2.getVideoTracks()[0].label+' state='+s2.getVideoTracks()[0].readyState);
+        window.__sdDouble=true;
+      }catch(e){log('second gUM failed: '+e);}
+    },6000);
+  }
+}
+function startMaskFeed(){
+  const mc=document.createElement('canvas');mc.width=640;mc.height=360;
+  const c=mc.getContext('2d');
+  const tick=()=>{
+    const t=performance.now()/1000;
+    const sway=Math.sin(t*1.2)*20;
+    c.clearRect(0,0,640,360);
+    c.fillStyle='#fff';
+    // head
+    c.beginPath();c.arc(320+sway,120,42,0,Math.PI*2);c.fill();
+    // torso
+    c.beginPath();
+    c.moveTo(240+sway,360);c.lineTo(262+sway,180);c.quadraticCurveTo(320+sway,150,378+sway,180);c.lineTo(400+sway,360);c.closePath();c.fill();
+    createImageBitmap(mc).then(bmp=>{window.postMessage({__snapdust:true,type:'test-mask',bitmap:bmp},location.origin,[bmp]);});
+  };
+  tick();setInterval(tick,200);
+  log('mask feed started');
+}
+async function runSeg(){
+  window.addEventListener('message',(ev)=>{
+    const d=ev.data;
+    if(d&&d.__snapdust&&d.type==='ml-result'&&d.mask){
+      const cv=document.getElementById('segview');const x=cv.getContext('2d');
+      const img=document.getElementById('personimg');
+      x.drawImage(img,0,0,640,360);
+      x.globalAlpha=0.5;x.globalCompositeOperation='source-atop';
+      x.drawImage(d.mask,0,0,640,360);  // white where person
+      x.globalCompositeOperation='source-over';x.globalAlpha=1;
+      // tint: draw mask in red beside
+      log('seg result: mask '+d.mask.width+'x'+d.mask.height);
+      window.__sdSegDone=true;
+    }
+  });
+  const img=new Image();img.id='personimg';img.src='person.jpg';
+  await img.decode();
+  log('person.jpg loaded '+img.naturalWidth+'x'+img.naturalHeight);
+  // Frames are dropped until the ML worker is ready, so keep resending
+  // (fresh bitmap each time; posted bitmaps are transferred, not cloned).
+  let tries=0;
+  const iv=setInterval(async ()=>{
+    if(window.__sdSegDone||++tries>25){clearInterval(iv);return;}
+    const bmp=await createImageBitmap(img);
+    window.postMessage({__snapdust:true,type:'frame',id:tries,ts:performance.now(),wantHands:true,wantMask:true,bitmap:bmp},location.origin,[bmp]);
+  },1500);
+}
+window.addEventListener('message',(ev)=>{const d=ev.data;if(d&&d.__snapdust&&d.type==='ml-delegate'&&!window.__sdDelegate){window.__sdDelegate=d.delegate;log('ML delegate: '+d.delegate);}if(d&&d.__snapdust&&d.type==='fx-state')log('fx-state: '+d.state);if(d&&d.__snapdust&&d.type==='cal-state')log('cal-state: '+d.state+(d.n!=null?' '+d.n:'')+(d.reason?' '+d.reason:'')+(d.coverage!=null?' cov='+d.coverage.toFixed(3):''));if(d&&d.__snapdust&&d.type==='mic')log('mic: '+d.action);
+if(d&&d.__snapdust&&d.type==='ml-result'&&d.mask){try{const mc=document.createElement('canvas');mc.width=64;mc.height=36;const x=mc.getContext('2d');x.drawImage(d.mask,0,0,64,36);const dd=x.getImageData(0,0,64,36).data;let s2=0;for(let i=3;i<dd.length;i+=4)s2+=dd[i];log('mask coverage: '+(s2/(64*36*255)).toFixed(3));}catch(e){log('coverage err '+e);}}});
+start();
+</script></body></html>

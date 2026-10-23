@@ -1,0 +1,11 @@
+node_modules/
+shots/
+*.zip
+test/*.y4m
+test/artifact.mjs
+test/diag.mjs
+test/probe.mjs
+test/meet2.mjs
+test/verifydl*.mjs
+test/person.jpg
+test/hands.jpg
