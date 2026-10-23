@@ -42,7 +42,7 @@ async function createModels(useDelegate) {
   });
   segmenter = await self.Vision.ImageSegmenter.createFromOptions(vision, {
     baseOptions: { modelAssetPath: self.__sdSegUrl, delegate: useDelegate },
-    runningMode: 'VIDEO', outputCategoryMask: true, outputConfidenceMasks: false
+    runningMode: 'VIDEO', outputCategoryMask: false, outputConfidenceMasks: true
   });
 }
 
@@ -95,21 +95,49 @@ self.onmessage = async (ev) => {
       if (d.wantMask && segmenter) {
         try {
           const res = segmenter.segmentForVideo(d.bitmap, ts);
-          if (res && res.categoryMask) {
-            const m = res.categoryMask;
+          if (res && res.confidenceMasks && res.confidenceMasks.length) {
+            // Threshold the person confidence channel instead of using the
+            // hard category mask: a high cutoff drops the loose halo AND
+            // low-confidence interior regions (posters, flags, objects near
+            // the person) that the binary mask keeps. Channel 0 = person for
+            // this model (matches the verified category-0-person mapping).
+            const m = res.confidenceMasks[res.confidenceMasks.length - 1]; // last channel = person (background is first for this model)
             const w = m.width, h = m.height;
-            const data = m.getAsUint8Array();
+            const conf = m.getAsFloat32Array();
+            const data = new Uint8Array(conf.length);
+            for (let i = 0; i < conf.length; i++) data[i] = conf[i] > 0.65 ? 0 : 1;
+            // Then erode 1 mask pixel (8-neighborhood) for a tight edge;
+            // the feather at draw time keeps it soft.
+            let cur = data;
+            for (let pass = 0; pass < 1; pass++) {
+              const er = new Uint8Array(cur.length).fill(1); // 1 = background
+              for (let y = 0; y < h; y++) {
+                for (let x = 0; x < w; x++) {
+                  const i = y * w + x;
+                  if (cur[i] !== 0) continue; // background stays background
+                  let keep = 1;
+                  for (let dy = -1; dy <= 1 && keep; dy++) {
+                    for (let dx = -1; dx <= 1; dx++) {
+                      const nx = x + dx, ny = y + dy;
+                      if (nx < 0 || ny < 0 || nx >= w || ny >= h || cur[ny * w + nx] !== 0) { keep = 0; break; }
+                    }
+                  }
+                  er[i] = keep ? 0 : 1;
+                }
+              }
+              cur = er;
+            }
             const img = new ImageData(w, h);
             const px = img.data;
-            for (let i = 0; i < data.length; i++) {
+            for (let i = 0; i < cur.length; i++) {
               const o = i * 4;
               px[o] = 255; px[o + 1] = 255; px[o + 2] = 255;
-              px[o + 3] = data[i] === 0 ? 255 : 0; // category 0 = person (verified visually); non-zero = background
+              px[o + 3] = cur[i] === 0 ? 255 : 0; // category 0 = person (verified visually); non-zero = background
             }
             const oc = new OffscreenCanvas(w, h);
             oc.getContext('2d').putImageData(img, 0, 0);
             out.mask = oc.transferToImageBitmap();
-            m.close();
+            for (const cm of res.confidenceMasks) cm.close();
           }
         } catch (e) { frameErr = true; log('segmentation error:', String(e)); }
       }
