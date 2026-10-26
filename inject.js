@@ -469,8 +469,9 @@
 
     // Countdown-driven backdrop capture: the user clicks, steps out of the
     // frame during the countdown, and we grab a verified-empty frame.
-    startCalibration() {
+    startCalibration(force) {
       if (this.calBusy) return;
+      this.forceCal = !!force;
       if (this.rawMode) {
         post({ type: 'cal-state', state: 'failed', reason: 'ml-down' });
         LOG('calibration refused: effects engine is down (camera-only mode)');
@@ -489,29 +490,35 @@
           post({ type: 'cal-state', state: 'countdown', n });
         } else {
           clearInterval(iv);
+          this.calStart = performance.now();
+          this.calBest = null;
           this.captureBackdrop(0);
         }
       }, 1000);
     }
 
     captureBackdrop(attempt) {
-      const cov = this.personCoverage();
-      if (cov == null) {
-        // Masks have not arrived yet (worker still loading). Retry for a
-        // while rather than risk capturing a frame that contains the user.
-        if (attempt < 15) {
+      // Only judge masks computed AFTER the countdown ended: the mask held
+      // from before the user stepped away is stale and shows them still
+      // in frame. Wait (up to ~8s) for fresh masks and accept the first
+      // one that is empty; reject only if every fresh mask shows a person.
+      const fresh = this.maskAt && this.maskAt > this.calStart;
+      const cov = fresh ? this.personCoverage() : null;
+      if (cov != null && (this.calBest == null || cov < this.calBest)) this.calBest = cov;
+      const limit = this.forceCal ? 0.9 : 0.06;
+      if (cov == null || cov > limit) {
+        if (attempt < 16) {
           if (attempt === 0) post({ type: 'cal-state', state: 'verifying' });
-          setTimeout(() => this.captureBackdrop(attempt + 1), 1000);
+          setTimeout(() => this.captureBackdrop(attempt + 1), 500);
         } else {
           this.calBusy = false;
-          post({ type: 'cal-state', state: 'failed', reason: 'no-mask' });
+          if (this.calBest == null) {
+            post({ type: 'cal-state', state: 'failed', reason: 'no-mask' });
+          } else {
+            post({ type: 'cal-state', state: 'failed', reason: 'person', coverage: this.calBest });
+            LOG('backdrop capture rejected: best fresh person coverage', this.calBest.toFixed(3));
+          }
         }
-        return;
-      }
-      if (cov > 0.04) {
-        this.calBusy = false;
-        post({ type: 'cal-state', state: 'failed', reason: 'person', coverage: cov });
-        LOG('backdrop capture rejected: person still covers', cov.toFixed(3), 'of frame');
         return;
       }
       const w = this.out.width, h = this.out.height;
@@ -617,6 +624,7 @@
         if (pipeline.maskBitmap && pipeline.maskBitmap.close) pipeline.maskBitmap.close();
         pipeline.maskBitmap = d.mask;
         if (typeof d.coverage === 'number') pipeline.lastCoverage = d.coverage;
+        pipeline.maskAt = performance.now();
         // The backdrop plate is frozen once captured: live background
         // refresh can bake missed-detection pixels (hair, hands, held
         // objects) into the plate as the user moves. Lighting changes are
@@ -639,7 +647,7 @@
     } else if (d.type === 'snapdust-toggle') {
       pipeline.manualToggle();
     } else if (d.type === 'snapdust-calibrate') {
-      pipeline.startCalibration();
+      pipeline.startCalibration(!!d.force);
     } else if (d.type === 'test-mask') {
       // test hook used by the offline FX harness only
       pipeline.testMode = true;

@@ -314,7 +314,7 @@
     } else if (d.state === 'failed') {
       calBusy = false;
       calibrated = false;
-      const why = d.reason === 'person' ? 'Person still in frame - step out fully'
+      const why = d.reason === 'person' ? 'Still sees ' + Math.round((d.coverage || 0) * 100) + '% of frame as person - Alt+Shift+B captures anyway'
         : d.reason === 'no-mask' ? 'Still starting up - click to retry'
         : d.reason === 'ml-down' ? 'Effects unavailable - camera only'
         : 'Capture failed - click to retry';
@@ -342,6 +342,9 @@
       e.preventDefault();
       window.postMessage({ __snapdust: true, type: calibrated ? 'snapdust-toggle' : 'snapdust-calibrate' }, location.origin);
       flashPill();
+    } else if (e.altKey && e.shiftKey && e.code === 'KeyB') {
+      e.preventDefault();
+      window.postMessage({ __snapdust: true, type: 'snapdust-calibrate', force: true }, location.origin);
     } else if (e.altKey && e.code === 'KeyB') {
       e.preventDefault();
       window.postMessage({ __snapdust: true, type: 'snapdust-calibrate' }, location.origin);
