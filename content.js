@@ -26,6 +26,7 @@
   const platform = PLATFORMS[location.hostname] || null;
 
   let weMuted = false;
+  let micExpected = null;   // what we asked Meet's mic to become, until verified
   let micWarn = false;
   // Observed Meet mic state, read from Meet's own button. 'unknown' when
   // the button can't be found; never inferred from our own click.
@@ -36,10 +37,13 @@
     return platform.isMuted(btn) ? 'muted' : 'live';
   }
   function checkMicAfter(expected) {
+    micExpected = expected;
+    micWarn = false;
     setTimeout(() => {
-      const st = micState();
-      micWarn = (st !== expected);
-      if (micWarn) LOG('mic state after', expected, 'attempt is', st);
+      // Re-evaluated on every render from Meet's actual button: a late
+      // update (slow click) clears the warning by itself.
+      micWarn = micState() !== micExpected;
+      if (micWarn) LOG('mic state after', expected, 'attempt is', micState());
       renderPill();
     }, 800);
   }
@@ -53,7 +57,7 @@
       checkMicAfter('muted');
     } else if (action === 'unmute') {
       if (muted && weMuted) { btn.click(); LOG('mic unmute clicked'); checkMicAfter('live'); }
-      else micWarn = false;
+      else { micWarn = false; micExpected = null; }
       weMuted = false;
     }
   }
@@ -396,6 +400,7 @@
   let pillBase = '', pillCls = '';
   function micSuffix() {
     const st = micState();
+    if (micWarn && st === micExpected) micWarn = false;
     if (micWarn) return ' | mic: ' + (st === 'unknown' ? 'unknown, check Meet' : st.toUpperCase() + ' - check Meet');
     return ' | mic: ' + (st === 'unknown' ? 'unknown' : st);
   }
