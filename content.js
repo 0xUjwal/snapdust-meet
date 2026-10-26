@@ -26,15 +26,34 @@
   const platform = PLATFORMS[location.hostname] || null;
 
   let weMuted = false;
+  let micWarn = false;
+  // Observed Meet mic state, read from Meet's own button. 'unknown' when
+  // the button can't be found; never inferred from our own click.
+  function micState() {
+    if (!platform) return 'unknown';
+    const btn = platform.micButton();
+    if (!btn) return 'unknown';
+    return platform.isMuted(btn) ? 'muted' : 'live';
+  }
+  function checkMicAfter(expected) {
+    setTimeout(() => {
+      const st = micState();
+      micWarn = (st !== expected);
+      if (micWarn) LOG('mic state after', expected, 'attempt is', st);
+      renderPill();
+    }, 800);
+  }
   function handleMic(action) {
     if (!platform) return;
     const btn = platform.micButton();
     if (!btn) { LOG('mic button not found (Meet UI not loaded yet?)'); return; }
     const muted = platform.isMuted(btn);
     if (action === 'mute') {
-      if (!muted) { btn.click(); weMuted = true; LOG('mic muted'); }
+      if (!muted) { btn.click(); weMuted = true; LOG('mic mute clicked'); }
+      checkMicAfter('muted');
     } else if (action === 'unmute') {
-      if (muted && weMuted) { btn.click(); LOG('mic unmuted'); }
+      if (muted && weMuted) { btn.click(); LOG('mic unmute clicked'); checkMicAfter('live'); }
+      else micWarn = false;
       weMuted = false;
     }
   }
@@ -198,6 +217,8 @@
       handleMic(d.action);
     } else if (d.type === 'cal-state') {
       handleCalState(d);
+    } else if (d.type === 'settings-state') {
+      fxDur = d.dur; fxDir = d.dir;
     } else if (d.type === 'gesture-state') {
       gestureOn = !!d.on;
       renderGestureChip();
@@ -234,6 +255,53 @@
     });
     document.documentElement.appendChild(pill);
     makeGestureChip();
+    makeSettings();
+  }
+  let settingsBtn, settingsPanel;
+  let fxDur = 1, fxDir = 'head';
+  function makeSettings() {
+    if (settingsBtn) return;
+    settingsBtn = document.createElement('button');
+    settingsBtn.id = 'snapdust-settings-btn';
+    settingsBtn.textContent = 'effect settings';
+    Object.assign(settingsBtn.style, {
+      position: 'fixed', right: '14px', bottom: '20px', zIndex: 99999,
+      padding: '4px 10px', borderRadius: '12px', border: 'none',
+      background: '#3c4043', color: '#9aa0a6',
+      font: '500 11px Roboto, Arial, sans-serif', cursor: 'pointer',
+      opacity: 0.85, boxShadow: '0 1px 3px rgba(0,0,0,.4)'
+    });
+    settingsBtn.addEventListener('click', () => {
+      if (settingsPanel) { settingsPanel.remove(); settingsPanel = null; return; }
+      settingsPanel = document.createElement('div');
+      settingsPanel.id = 'snapdust-settings';
+      Object.assign(settingsPanel.style, {
+        position: 'fixed', right: '14px', bottom: '170px', zIndex: 99999,
+        background: '#202124', color: '#e8eaed', padding: '10px', borderRadius: '10px',
+        font: '12px Roboto, Arial, sans-serif', width: '230px',
+        boxShadow: '0 2px 10px rgba(0,0,0,.5)'
+      });
+      const mk = (label, id, opts, val) => {
+        const row = document.createElement('div');
+        row.style.margin = '4px 0';
+        const l = document.createElement('label');
+        l.textContent = label + ' ';
+        const sel = document.createElement('select');
+        sel.id = id;
+        for (const [v, t] of opts) { const o = document.createElement('option'); o.value = v; o.textContent = t; sel.appendChild(o); }
+        sel.value = String(val);
+        sel.addEventListener('change', () => {
+          const dur = document.getElementById('snapdust-dur').value;
+          const dir = document.getElementById('snapdust-dir').value;
+          window.postMessage({ __snapdust: true, type: 'snapdust-settings', dur: Number(dur), dir }, location.origin);
+        });
+        l.appendChild(sel); row.appendChild(l); return row;
+      };
+      settingsPanel.appendChild(mk('Speed', 'snapdust-dur', [['0.6', 'fast'], ['1', 'normal'], ['2', 'slow']], fxDur));
+      settingsPanel.appendChild(mk('Style', 'snapdust-dir', [['head', 'dust, head first'], ['ltr', 'dust, left to right'], ['fade', 'fade only (no particles)']], fxDir));
+      document.documentElement.appendChild(settingsPanel);
+    });
+    document.documentElement.appendChild(settingsBtn);
   }
   let gChip;
   let gestureOn = false;
@@ -323,12 +391,26 @@
       setPill('SnapDust: ' + why, 'err');
     }
   }
+  let pillBase = '', pillCls = '';
+  function micSuffix() {
+    const st = micState();
+    if (micWarn) return ' | mic: ' + (st === 'unknown' ? 'unknown, check Meet' : st.toUpperCase() + ' - check Meet');
+    return ' | mic: ' + (st === 'unknown' ? 'unknown' : st);
+  }
+  function renderPill() {
+    if (!pill) return;
+    const showMic = pillCls === 'on' || pillCls === 'dust';
+    pill.textContent = pillBase + (showMic ? micSuffix() : '');
+    if (showMic && micWarn) pill.style.background = '#d93025';
+    else pill.style.background =
+      pillCls === 'on' ? '#1e8e3e' : pillCls === 'dust' ? '#7b1fa2' :
+      pillCls === 'err' ? '#d93025' : pillCls === 'busy' ? '#e37400' : '#3c4043';
+  }
+  setInterval(renderPill, 1000);
   function setPill(text, cls) {
     if (!pill) makePill();
-    pill.textContent = text;
-    pill.style.background =
-      cls === 'on' ? '#1e8e3e' : cls === 'dust' ? '#7b1fa2' :
-      cls === 'err' ? '#d93025' : cls === 'busy' ? '#e37400' : '#3c4043';
+    pillBase = text; pillCls = cls || '';
+    renderPill();
   }
   function flashPill() {
     if (!pill) return;

@@ -77,6 +77,15 @@
       this.state = 'ready';          // ready | dissolving | gone | reassembling
       this.cells = null;
       this.cellSize = 8;
+      // Effect settings (persisted in page localStorage like the gesture flag).
+      this.fxDur = 1;            // speed multiplier on effect length
+      this.fxDir = 'head';       // head | ltr | fade
+      try {
+        const sd = parseFloat(localStorage.getItem('__sd_dur'));
+        if (sd >= 0.5 && sd <= 3) this.fxDur = sd;
+        const sr = localStorage.getItem('__sd_dir');
+        if (sr === 'head' || sr === 'ltr' || sr === 'fade') this.fxDir = sr;
+      } catch (e) {}
       this.particles = [];
       this.flash = null;
       this.t0 = 0;
@@ -302,8 +311,17 @@
         // The composite is only needed while the effect is active.
         o.drawImage(this.video, 0, 0, w, h);
       } else if (this.state === 'dissolving' || this.state === 'reassembling') {
-        this.stepCells();
-        o.drawImage(this.remain, 0, 0);
+        if (this.fxDir === 'fade') {
+          const st = this.state;
+          const k = this.stepFade();
+          o.save();
+          o.globalAlpha = st === 'dissolving' ? 1 - k : k;
+          o.drawImage(this.person, 0, 0);
+          o.restore();
+        } else {
+          this.stepCells();
+          o.drawImage(this.remain, 0, 0);
+        }
       }
       // state 'gone': clean background plate only - the person is absent.
       if (window.__sdDebugMask && this.maskBitmap) {
@@ -316,7 +334,20 @@
       this.drawFlash(o);
     }
 
+    // Fade-only mode: no particles. Returns progress 0..1 and ends the
+    // state when done. (draw() maps progress to alpha per direction.)
+    stepFade() {
+      const k = Math.min(1, (performance.now() - this.t0) / 1000 / (1.2 * this.fxDur));
+      if (k >= 1) {
+        if (this.state === 'dissolving') { this.state = 'gone'; postFx('gone'); }
+        else { this.state = 'ready'; postFx('ready'); }
+        return 1;
+      }
+      return k;
+    }
+
     buildCells(reverse) {
+      if (this.fxDir === 'fade') { this.renderPersonCutout(); this.cells = []; return; }
       const w = this.out.width, h = this.out.height, cs = this.cellSize;
       this.renderPersonCutout();
       const img = this.pctx.getImageData(0, 0, w, h).data;
@@ -338,10 +369,10 @@
             // dissolve and reassemble - the face goes first and returns
             // first, which reads as the Thanos-style effect the user
             // pointed at. (Was a left/right sweep.)
-            const sweep = r / rows;
+            const sweep = this.fxDir === 'ltr' ? c / cols : r / rows;
             cells.push({
               x: c * cs, y: r * cs, done: false,
-              delay: sweep * 0.7 + Math.random() * 0.45,
+              delay: (sweep * 0.7 + Math.random() * 0.45) * this.fxDur,
               color: `rgb(${img[i]},${img[i + 1]},${img[i + 2]})`
             });
           }
@@ -368,7 +399,7 @@
           }
         }
         r.restore();
-        if (t > 1.5) {
+        if (t > 1.5 * this.fxDur) {
           this.state = 'gone';
           this.cells = null;
           this.rctx.clearRect(0, 0, this.out.width, this.out.height);
@@ -383,7 +414,7 @@
             this.spawnCellParticles(c, 1);
           }
         }
-        if (t > 1.4) {
+        if (t > 1.4 * this.fxDur) {
           this.state = 'ready';
           this.cells = null;
           postFx('ready');
@@ -638,6 +669,7 @@
   pipeline.gestureEnabled = false;
   try { pipeline.gestureEnabled = localStorage.getItem('__sd_gesture') === '1'; } catch (e) {}
   post({ type: 'gesture-state', on: pipeline.gestureEnabled });
+  post({ type: 'settings-state', dur: pipeline.fxDur, dir: pipeline.fxDir });
 
   /* ---------------- messages from the isolated content script ---------------- */
   window.addEventListener('message', (ev) => {
@@ -671,6 +703,12 @@
       try { localStorage.setItem('__sd_gesture', d.on ? '1' : '0'); } catch (e) {}
       LOG('gesture detection: ' + (pipeline.gestureEnabled ? 'ON (experimental)' : 'off (manual mode)'));
       post({ type: 'gesture-state', on: pipeline.gestureEnabled });
+    } else if (d.type === 'snapdust-settings') {
+      const dur = Number(d.dur), dir = d.dir;
+      if (dur >= 0.5 && dur <= 3) pipeline.fxDur = dur;
+      if (dir === 'head' || dir === 'ltr' || dir === 'fade') pipeline.fxDir = dir;
+      try { localStorage.setItem('__sd_dur', String(pipeline.fxDur)); localStorage.setItem('__sd_dir', pipeline.fxDir); } catch (e) {}
+      post({ type: 'settings-state', dur: pipeline.fxDur, dir: pipeline.fxDir });
     } else if (d.type === 'snapdust-toggle') {
       pipeline.manualToggle();
     } else if (d.type === 'snapdust-calibrate') {
