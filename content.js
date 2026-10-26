@@ -426,6 +426,7 @@
   }
   makePill();
   setPill('SnapDust: set backdrop', '');
+  window.postMessage({ __snapdust: true, type: 'snapdust-sync' }, location.origin);
   window.addEventListener('keydown', (e) => {
     if (e.altKey && e.code === 'KeyS') {
       e.preventDefault();

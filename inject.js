@@ -704,6 +704,11 @@
       try { localStorage.setItem('__sd_gesture', d.on ? '1' : '0'); } catch (e) {}
       LOG('gesture detection: ' + (pipeline.gestureEnabled ? 'ON (experimental)' : 'off (manual mode)'));
       post({ type: 'gesture-state', on: pipeline.gestureEnabled });
+    } else if (d.type === 'snapdust-sync') {
+      // The isolated content script loads after this script and can miss the
+      // startup state posts; it asks for them once it is listening.
+      post({ type: 'settings-state', dur: pipeline.fxDur, dir: pipeline.fxDir });
+      post({ type: 'gesture-state', on: pipeline.gestureEnabled });
     } else if (d.type === 'snapdust-settings') {
       const dur = Number(d.dur), dir = d.dir;
       if (dur >= 0.5 && dur <= 3) pipeline.fxDur = dur;
