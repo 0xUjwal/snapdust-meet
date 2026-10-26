@@ -490,59 +490,86 @@
           post({ type: 'cal-state', state: 'countdown', n });
         } else {
           clearInterval(iv);
-          this.calStart = performance.now();
-          this.calBest = null;
-          this.captureBackdrop(0);
+          this.captureBackdrop();
         }
       }, 1000);
     }
 
-    captureBackdrop(attempt) {
-      // Only judge masks computed AFTER the countdown ended: the mask held
-      // from before the user stepped away is stale and shows them still
-      // in frame. Wait (up to ~8s) for fresh masks and accept the first
-      // one that is empty; reject only if every fresh mask shows a person.
-      const fresh = this.maskAt && this.maskAt > this.calStart;
-      const cov = fresh ? this.personCoverage() : null;
-      if (cov != null && (this.calBest == null || cov < this.calBest)) this.calBest = cov;
-      const limit = this.forceCal ? 0.9 : 0.06;
-      if (cov == null || cov > limit) {
-        if (attempt < 16) {
-          if (attempt === 0) post({ type: 'cal-state', state: 'verifying' });
-          setTimeout(() => this.captureBackdrop(attempt + 1), 500);
-        } else {
-          this.calBusy = false;
-          if (this.calBest == null) {
-            post({ type: 'cal-state', state: 'failed', reason: 'no-mask' });
-          } else {
-            post({ type: 'cal-state', state: 'failed', reason: 'person', coverage: this.calBest });
-            LOG('backdrop capture rejected: best fresh person coverage', this.calBest.toFixed(3));
-          }
-        }
-        return;
-      }
+    // Capture is bound to the camera INPUT time, not to when a result
+    // arrives: snapshot the video, then judge only a mask whose input frame
+    // was sent at or after that snapshot (result ts echoes the send time).
+    // A mask whose inference started before the countdown ended, or before
+    // the snapshot, is ignored, so a stale frame can't veto or approve.
+    captureBackdrop() {
       const w = this.out.width, h = this.out.height;
       if (!w || this.video.readyState < 2) {
         this.calBusy = false;
         post({ type: 'cal-state', state: 'failed', reason: 'no-video' });
         return;
       }
+      this.calWaiting = true;
+      this.calBest = null;
+      this.calTries = 0;
+      this.calDeadline = performance.now() + 8000;
+      post({ type: 'cal-state', state: 'verifying' });
+      this.takeCandidate();
+      clearTimeout(this.calTimer);
+      this.calTimer = setTimeout(() => {
+        if (!this.calWaiting) return;
+        this.calWaiting = false;
+        this.calBusy = false;
+        if (this.calBest == null) {
+          post({ type: 'cal-state', state: 'failed', reason: 'no-mask' });
+        } else {
+          post({ type: 'cal-state', state: 'failed', reason: 'person', coverage: this.calBest });
+          LOG('backdrop rejected: lowest person coverage across', this.calTries, 'fresh frames', this.calBest.toFixed(3));
+        }
+      }, 8000);
+    }
+
+    takeCandidate() {
+      const w = this.out.width, h = this.out.height;
+      if (!this.cand) this.cand = document.createElement('canvas');
+      this.cand.width = w; this.cand.height = h;
+      this.cand.getContext('2d').drawImage(this.video, 0, 0, w, h);
+      this.candT = performance.now();
+    }
+
+    onCalMask(inputTs) {
+      if (!this.calWaiting) return;
+      if (typeof inputTs !== 'number' || inputTs < this.candT) return; // stale input
+      const cov = this.personCoverage();
+      if (cov == null) return;
+      this.calTries++;
+      if (this.calBest == null || cov < this.calBest) this.calBest = cov;
+      if (cov > 0.04 && !this.forceCal) {
+        // Person (or something mask-detected) in this frame: take a newer
+        // snapshot and judge the next fresh result.
+        this.takeCandidate();
+        return;
+      }
+      this.calWaiting = false;
+      clearTimeout(this.calTimer);
+      this.commitPlate(cov, cov > 0.04);
+    }
+
+    commitPlate(cov, forced) {
+      const w = this.out.width, h = this.out.height;
       if (this.plate.width !== w) {
         this.plate.width = this.plateTmp.width = this.invMask.width = w;
         this.plate.height = this.plateTmp.height = this.invMask.height = h;
       }
       this.plateCtx.globalCompositeOperation = 'source-over';
       this.plateCtx.clearRect(0, 0, w, h);
-      this.plateCtx.drawImage(this.video, 0, 0, w, h);
+      this.plateCtx.drawImage(this.cand, 0, 0, w, h);
       this.plateReady = true;
       this.calibrated = true;
       this.calBusy = false;
-      // Small preview for the user to confirm or recapture.
       const pv = document.createElement('canvas');
       pv.width = 320; pv.height = Math.max(2, Math.round(320 * h / w));
       pv.getContext('2d').drawImage(this.plate, 0, 0, pv.width, pv.height);
-      post({ type: 'cal-state', state: 'captured', preview: pv.toDataURL('image/jpeg', 0.75), coverage: cov });
-      LOG('backdrop captured (person coverage', cov.toFixed(3) + ')');
+      post({ type: 'cal-state', state: 'captured', preview: pv.toDataURL('image/jpeg', 0.75), coverage: cov, forced: !!forced });
+      LOG('backdrop captured (person coverage', cov.toFixed(3) + (forced ? ', FORCED without empty check' : '') + ')');
     }
 
     onSnap(pos) {
@@ -624,7 +651,7 @@
         if (pipeline.maskBitmap && pipeline.maskBitmap.close) pipeline.maskBitmap.close();
         pipeline.maskBitmap = d.mask;
         if (typeof d.coverage === 'number') pipeline.lastCoverage = d.coverage;
-        pipeline.maskAt = performance.now();
+        pipeline.onCalMask(d.ts);
         // The backdrop plate is frozen once captured: live background
         // refresh can bake missed-detection pixels (hair, hands, held
         // objects) into the plate as the user moves. Lighting changes are

@@ -266,7 +266,7 @@
   function hidePreview() {
     if (previewDiv) { previewDiv.remove(); previewDiv = null; }
   }
-  function showPreview(dataUrl) {
+  function showPreview(dataUrl, forced) {
     hidePreview();
     previewDiv = document.createElement('div');
     previewDiv.id = 'snapdust-preview';
@@ -280,7 +280,7 @@
     img.src = dataUrl;
     Object.assign(img.style, { width: '240px', borderRadius: '6px', display: 'block', margin: '0 auto 8px' });
     const label = document.createElement('div');
-    label.textContent = 'Backdrop captured. This is what others see while you are dusted.';
+    label.textContent = forced ? 'FORCED capture: no empty-frame check passed. If you or objects are visible here, press Alt+B to recapture.' : 'Backdrop captured. This is what others see while you are dusted.';
     label.style.marginBottom = '8px';
     const btnStyle = { padding: '5px 12px', margin: '0 4px', borderRadius: '12px', border: 'none', cursor: 'pointer', font: '500 12px Roboto, Arial, sans-serif' };
     const ok = document.createElement('button');
@@ -310,11 +310,11 @@
       calBusy = false;
       calibrated = true;
       setPill('SnapDust ready', 'on');
-      if (d.preview) showPreview(d.preview);
+      if (d.preview) showPreview(d.preview, d.forced);
     } else if (d.state === 'failed') {
       calBusy = false;
       calibrated = false;
-      const why = d.reason === 'person' ? 'Still sees ' + Math.round((d.coverage || 0) * 100) + '% of frame as person - Alt+Shift+B captures anyway'
+      const why = d.reason === 'person' ? 'Still sees ' + Math.round((d.coverage || 0) * 100) + '% of frame as person - Alt+Shift+B forces capture (may include you)'
         : d.reason === 'no-mask' ? 'Still starting up - click to retry'
         : d.reason === 'ml-down' ? 'Effects unavailable - camera only'
         : 'Capture failed - click to retry';
