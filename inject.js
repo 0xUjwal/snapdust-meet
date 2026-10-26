@@ -625,6 +625,7 @@
         this.t0 = performance.now();
         if (pos) this.flash = { x: pos[0] * this.out.width, y: pos[1] * this.out.height, t0: performance.now() };
         post({ type: 'mic', action: 'unmute' });
+        postFx('return');
         LOG('snap! reassembling');
       }
     }

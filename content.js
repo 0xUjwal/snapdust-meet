@@ -223,7 +223,9 @@
       gestureOn = !!d.on;
       renderGestureChip();
     } else if (d.type === 'fx-state') {
-      if (d.state === 'gone') setPill('SnapDust: dusted', 'dust');
+      if (d.state === 'dust') setPill('SnapDust: vanishing...', 'dust');
+      else if (d.state === 'return') setPill('SnapDust: returning...', 'dust');
+      else if (d.state === 'gone') setPill('SnapDust: dusted', 'dust');
       else if (d.state === 'ready') setPill('SnapDust ready', 'on');
       else if (d.state === 'raw') setPill('SnapDust: camera only (effects paused)', 'err');
     }
