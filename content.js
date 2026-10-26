@@ -340,7 +340,8 @@
   function hidePreview() {
     if (previewDiv) { previewDiv.remove(); previewDiv = null; }
   }
-  function showPreview(dataUrl, forced) {
+  function showPreview(dataUrl, kind, cov) {
+    const pending = kind === 'forced' || kind === 'objects';
     hidePreview();
     previewDiv = document.createElement('div');
     previewDiv.id = 'snapdust-preview';
@@ -354,13 +355,20 @@
     img.src = dataUrl;
     Object.assign(img.style, { width: '240px', borderRadius: '6px', display: 'block', margin: '0 auto 8px' });
     const label = document.createElement('div');
-    label.textContent = forced ? 'FORCED capture: no empty-frame check passed. If you or objects are visible here, press Alt+B to recapture.' : 'Backdrop captured. This is what others see while you are dusted.';
+    label.textContent = kind === 'forced'
+      ? 'FORCED capture: the empty-frame check was skipped. Red = still detected as person. Use it only if you are not visible.'
+      : kind === 'objects'
+        ? 'Kept ~' + Math.round((cov || 0) * 100) + '% as background objects (red). Use it only if the red areas are NOT you.'
+        : 'Backdrop captured. This is what others see while you are dusted.';
     label.style.marginBottom = '8px';
     const btnStyle = { padding: '5px 12px', margin: '0 4px', borderRadius: '12px', border: 'none', cursor: 'pointer', font: '500 12px Roboto, Arial, sans-serif' };
     const ok = document.createElement('button');
-    ok.textContent = 'Looks good';
+    ok.textContent = pending ? 'Use this backdrop' : 'Looks good';
     Object.assign(ok.style, btnStyle, { background: '#1e8e3e', color: '#fff' });
-    ok.addEventListener('click', hidePreview);
+    ok.addEventListener('click', () => {
+      if (pending) window.postMessage({ __snapdust: true, type: 'snapdust-confirm' }, location.origin);
+      hidePreview();
+    });
     const re = document.createElement('button');
     re.textContent = 'Recapture';
     Object.assign(re.style, btnStyle, { background: '#3c4043', color: '#e8eaed' });
@@ -384,11 +392,16 @@
       calBusy = false;
       calibrated = true;
       setPill('SnapDust ready', 'on');
-      if (d.preview) showPreview(d.preview, d.forced);
+      if (d.preview) showPreview(d.preview, 'clean', d.coverage);
+    } else if (d.state === 'pending') {
+      calBusy = false;
+      calibrated = false;
+      setPill('SnapDust: confirm backdrop preview', 'busy');
+      if (d.preview) showPreview(d.preview, d.kind, d.coverage);
     } else if (d.state === 'failed') {
       calBusy = false;
       calibrated = false;
-      const why = d.reason === 'person' ? 'Still sees ' + Math.round((d.coverage || 0) * 100) + '% of frame as person - Alt+Shift+B forces capture (may include you)'
+      const why = d.reason === 'person' ? 'Still sees ' + Math.round((d.coverage || 0) * 100) + '% of frame as person' + (d.baseline ? ' (you were ' + Math.round(d.baseline * 100) + '%)' : '') + ' - Alt+Shift+B forces capture (may include you)'
         : d.reason === 'no-mask' ? 'Still starting up - click to retry'
         : d.reason === 'ml-down' ? 'Effects unavailable - camera only'
         : 'Capture failed - click to retry';

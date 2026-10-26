@@ -316,7 +316,9 @@
           const k = this.stepFade();
           o.save();
           o.globalAlpha = st === 'dissolving' ? 1 - k : k;
-          o.drawImage(this.person, 0, 0);
+          // return: fade the live camera frame in (no stale mask involved)
+          if (st === 'reassembling') o.drawImage(this.video, 0, 0, w, h);
+          else o.drawImage(this.person, 0, 0);
           o.restore();
         } else {
           this.stepCells();
@@ -353,7 +355,11 @@
       const img = this.pctx.getImageData(0, 0, w, h).data;
       this.rctx.clearRect(0, 0, w, h);
       if (reverse) {
-        // reassemble: start empty, cells get stamped back from the cutout
+        // reassemble: nothing revealed yet. Revealed cells are shown from the
+        // LIVE camera (re-cut every frame in stepCells), so the returning
+        // person keeps moving instead of freezing into a still snapshot.
+        if (!this.reveal) { this.reveal = document.createElement('canvas'); this.revealCtx = this.reveal.getContext('2d'); }
+        this.reveal.width = w; this.reveal.height = h;
       } else {
         this.rctx.drawImage(this.person, 0, 0);
       }
@@ -364,14 +370,15 @@
           const x = Math.min(w - 1, c * cs + (cs >> 1));
           const y = Math.min(h - 1, r * cs + (cs >> 1));
           const i = (y * w + x) * 4;
-          if (img[i + 3] > 40) {
+          const isPerson = img[i + 3] > 40;
+          if (isPerson || reverse) {
             // Reference-informed sweep: top-to-bottom (head first) for both
             // dissolve and reassemble - the face goes first and returns
             // first, which reads as the Thanos-style effect the user
             // pointed at. (Was a left/right sweep.)
             const sweep = this.fxDir === 'ltr' ? c / cols : r / rows;
             cells.push({
-              x: c * cs, y: r * cs, done: false,
+              x: c * cs, y: r * cs, done: false, person: isPerson,
               delay: (sweep * 0.7 + Math.random() * 0.45) * this.fxDur,
               color: `rgb(${img[i]},${img[i + 1]},${img[i + 2]})`
             });
@@ -407,13 +414,27 @@
         }
       } else if (this.state === 'reassembling') {
         const r = this.rctx;
+        const rv = this.revealCtx;
+        rv.fillStyle = '#fff';
         for (const c of this.cells) {
           if (!c.done && t > c.delay) {
             c.done = true;
-            r.drawImage(this.person, c.x, c.y, cs, cs, c.x, c.y, cs, cs);
-            this.spawnCellParticles(c, 1);
+            rv.fillRect(c.x, c.y, cs, cs);
+            if (c.person) this.spawnCellParticles(c, 1);
           }
         }
+        // live cutout of the person, clipped to the cells revealed so far
+        // Draw the live camera frame itself (not a mask cutout): the mask lags
+        // the camera by hundreds of ms on CPU, which showed as the returning
+        // person lagging/freezing. The backdrop is static, so the live
+        // background inside revealed cells matches the plate.
+        r.save();
+        r.globalCompositeOperation = 'source-over';
+        r.clearRect(0, 0, this.out.width, this.out.height);
+        r.drawImage(this.video, 0, 0, this.out.width, this.out.height);
+        r.globalCompositeOperation = 'destination-in';
+        r.drawImage(this.reveal, 0, 0);
+        r.restore();
         if (t > 1.4 * this.fxDur) {
           this.state = 'ready';
           this.cells = null;
@@ -494,7 +515,9 @@
       x.drawImage(this.maskBitmap, 0, 0, 64, 36);
       const d = x.getImageData(0, 0, 64, 36).data;
       let s = 0;
-      for (let i = 3; i < d.length; i += 4) s += d[i];
+      const th = new Uint8Array(64 * 36);
+      for (let i = 3, k = 0; i < d.length; i += 4, k++) { s += d[i]; th[k] = d[i] > 100 ? 1 : 0; }
+      this.lastThumb = th;
       return s / (64 * 36 * 255);
     }
 
@@ -513,10 +536,14 @@
         return;
       }
       this.calBusy = true;
+      this.calPending = false;
+      this.cal0 = this.personCoverage() || 0;   // coverage while the user is still in frame
       let n = 4;
       post({ type: 'cal-state', state: 'countdown', n });
       const iv = setInterval(() => {
         n--;
+        const c = this.personCoverage();
+        if (c != null && c > this.cal0) this.cal0 = c;
         if (n > 0) {
           post({ type: 'cal-state', state: 'countdown', n });
         } else {
@@ -539,6 +566,7 @@
         return;
       }
       this.calWaiting = true;
+      this.calHist = [];
       this.calBest = null;
       this.calTries = 0;
       this.calDeadline = performance.now() + 8000;
@@ -552,7 +580,7 @@
         if (this.calBest == null) {
           post({ type: 'cal-state', state: 'failed', reason: 'no-mask' });
         } else {
-          post({ type: 'cal-state', state: 'failed', reason: 'person', coverage: this.calBest });
+          post({ type: 'cal-state', state: 'failed', reason: 'person', coverage: this.calBest, baseline: this.cal0 });
           LOG('backdrop rejected: lowest person coverage across', this.calTries, 'fresh frames', this.calBest.toFixed(3));
         }
       }, 8000);
@@ -573,7 +601,13 @@
       if (cov == null) return;
       this.calTries++;
       if (this.calBest == null || cov < this.calBest) this.calBest = cov;
-      if (cov > 0.04 && !this.forceCal) {
+      this.calHist.push({ cov, th: this.lastThumb });
+      if (this.calHist.length > 8) this.calHist.shift();
+      let accept = null;
+      if (this.forceCal) accept = 'forced';
+      else if (cov <= 0.04) accept = 'clean';
+      else if (this.settledObjects()) accept = 'objects';
+      if (!accept) {
         // Person (or something mask-detected) in this frame: take a newer
         // snapshot and judge the next fresh result.
         this.takeCandidate();
@@ -581,10 +615,30 @@
       }
       this.calWaiting = false;
       clearTimeout(this.calTimer);
-      this.commitPlate(cov, cov > 0.04);
+      this.commitPlate(cov, accept);
     }
 
-    commitPlate(cov, forced) {
+    // True when the remaining "person" area is a small, static leftover that
+    // is much smaller than the user was when calibration started: the shape
+    // of a chair, poster or coat rack that the segmenter mistakes for a
+    // person. A user who has not left would still be near the baseline size
+    // and would move. This can't tell a static object from a still arm or
+    // leg that is the user's own, so the result always needs the user's
+    // confirmation (commitPlate leaves the backdrop pending).
+    settledObjects() {
+      const h = this.calHist;
+      if (h.length < 8 || this.cal0 < 0.10) return false;
+      const covs = h.map(x => x.cov);
+      const mx = Math.max(...covs), mn = Math.min(...covs), mean = covs.reduce((a, b) => a + b, 0) / covs.length;
+      if (mx > 0.5 * this.cal0 || mx > 0.25) return false;
+      if ((mx - mn) / mean > 0.25) return false;
+      const a = h[0].th, b = h[h.length - 1].th;
+      let inter = 0, uni = 0;
+      for (let i = 0; i < a.length; i++) { if (a[i] && b[i]) inter++; if (a[i] || b[i]) uni++; }
+      return uni > 0 && inter / uni > 0.8;
+    }
+
+    commitPlate(cov, kind) {
       const w = this.out.width, h = this.out.height;
       if (this.plate.width !== w) {
         this.plate.width = this.plateTmp.width = this.invMask.width = w;
@@ -594,13 +648,36 @@
       this.plateCtx.clearRect(0, 0, w, h);
       this.plateCtx.drawImage(this.cand, 0, 0, w, h);
       this.plateReady = true;
-      this.calibrated = true;
       this.calBusy = false;
       const pv = document.createElement('canvas');
       pv.width = 320; pv.height = Math.max(2, Math.round(320 * h / w));
-      pv.getContext('2d').drawImage(this.plate, 0, 0, pv.width, pv.height);
-      post({ type: 'cal-state', state: 'captured', preview: pv.toDataURL('image/jpeg', 0.75), coverage: cov, forced: !!forced });
-      LOG('backdrop captured (person coverage', cov.toFixed(3) + (forced ? ', FORCED without empty check' : '') + ')');
+      const px = pv.getContext('2d');
+      px.drawImage(this.plate, 0, 0, pv.width, pv.height);
+      // Non-clean captures: tint what the detector still calls "person" red
+      // so the user can see exactly which areas are kept as background.
+      if (kind !== 'clean' && this.maskBitmap) {
+        const t = document.createElement('canvas');
+        t.width = pv.width; t.height = pv.height;
+        const tx = t.getContext('2d');
+        tx.drawImage(this.maskBitmap, 0, 0, t.width, t.height);
+        tx.globalCompositeOperation = 'source-in';
+        tx.fillStyle = 'rgba(255,0,0,0.55)';
+        tx.fillRect(0, 0, t.width, t.height);
+        px.drawImage(t, 0, 0);
+      }
+      const pending = kind !== 'clean';
+      this.calPending = pending;
+      this.calibrated = !pending;
+      post({ type: 'cal-state', state: pending ? 'pending' : 'captured', preview: pv.toDataURL('image/jpeg', 0.75), coverage: cov, kind, baseline: this.cal0 });
+      LOG('backdrop ' + (pending ? 'PENDING confirm (' + kind + ')' : 'captured') + ' (person coverage', cov.toFixed(3) + ', baseline ' + (this.cal0 || 0).toFixed(3) + ')');
+    }
+
+    confirmBackdrop() {
+      if (!this.calPending) return;
+      this.calPending = false;
+      this.calibrated = true;
+      post({ type: 'cal-state', state: 'captured' });
+      LOG('backdrop confirmed by user');
     }
 
     onSnap(pos) {
@@ -689,7 +766,7 @@
         // refresh can bake missed-detection pixels (hair, hands, held
         // objects) into the plate as the user moves. Lighting changes are
         // handled by recapture (Alt+B), not by risky incremental updates.
-        if (!pipeline.calibrated) pipeline.updatePlate();
+        if (!pipeline.calibrated && !pipeline.calPending) pipeline.updatePlate();
       }
     } else if (d.type === 'ml-dead' || d.type === 'ext-dead') {
       if (!pipeline.rawMode) {
@@ -717,6 +794,8 @@
       post({ type: 'settings-state', dur: pipeline.fxDur, dir: pipeline.fxDir });
     } else if (d.type === 'snapdust-toggle') {
       pipeline.manualToggle();
+    } else if (d.type === 'snapdust-confirm') {
+      pipeline.confirmBackdrop();
     } else if (d.type === 'snapdust-calibrate') {
       pipeline.startCalibration(!!d.force);
     } else if (d.type === 'test-mask') {
