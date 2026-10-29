@@ -354,90 +354,111 @@
       this.renderPersonCutout();
       const img = this.pctx.getImageData(0, 0, w, h).data;
       this.rctx.clearRect(0, 0, w, h);
-      if (reverse) {
-        // reassemble: nothing revealed yet. Revealed cells are shown from the
-        // LIVE camera (re-cut every frame in stepCells), so the returning
-        // person keeps moving instead of freezing into a still snapshot.
-        if (!this.reveal) { this.reveal = document.createElement('canvas'); this.revealCtx = this.reveal.getContext('2d'); }
-        this.reveal.width = w; this.reveal.height = h;
-      } else {
-        this.rctx.drawImage(this.person, 0, 0);
-      }
       const cols = Math.ceil(w / cs), rows = Math.ceil(h / cs);
+      // Soft-mask canvases: one pixel per cell, upscaled with smoothing and
+      // a blur so cells fade in/out gradually instead of popping as squares.
+      if (!this.small) {
+        this.small = document.createElement('canvas');
+        this.smallCtx = this.small.getContext('2d');
+        this.soft = document.createElement('canvas');
+        this.softCtx = this.soft.getContext('2d');
+      }
+      this.small.width = cols; this.small.height = rows;
+      this.soft.width = Math.ceil(w / 4); this.soft.height = Math.ceil(h / 4);
+      this.smallData = this.smallCtx.createImageData(cols, rows);
+      for (let i = 0; i < cols * rows; i++) {
+        const o4 = i * 4;
+        this.smallData.data[o4] = this.smallData.data[o4 + 1] = this.smallData.data[o4 + 2] = 255;
+      }
+      // spatially coherent noise (two box-blur passes) so the dissolve eats
+      // the silhouette in soft clumps rather than per-cell static
+      let noise = new Float32Array(cols * rows);
+      for (let i = 0; i < noise.length; i++) noise[i] = Math.random();
+      for (let pass = 0; pass < 2; pass++) {
+        const nx = new Float32Array(noise.length);
+        for (let r = 0; r < rows; r++) {
+          for (let c = 0; c < cols; c++) {
+            let s = 0, n = 0;
+            for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+              const rr = r + dr, cc = c + dc;
+              if (rr < 0 || cc < 0 || rr >= rows || cc >= cols) continue;
+              s += noise[rr * cols + cc]; n++;
+            }
+            nx[r * cols + c] = s / n;
+          }
+        }
+        noise = nx;
+      }
+      let lo = 1, hi = 0;
+      for (const v of noise) { if (v < lo) lo = v; if (v > hi) hi = v; }
       const cells = [];
       for (let r = 0; r < rows; r++) {
         for (let c = 0; c < cols; c++) {
           const x = Math.min(w - 1, c * cs + (cs >> 1));
           const y = Math.min(h - 1, r * cs + (cs >> 1));
           const i = (y * w + x) * 4;
-          const isPerson = img[i + 3] > 40;
-          if (isPerson || reverse) {
-            // Reference-informed sweep: top-to-bottom (head first) for both
-            // dissolve and reassemble - the face goes first and returns
-            // first, which reads as the Thanos-style effect the user
-            // pointed at. (Was a left/right sweep.)
-            const sweep = this.fxDir === 'ltr' ? c / cols : r / rows;
-            cells.push({
-              x: c * cs, y: r * cs, done: false, person: isPerson,
-              delay: (sweep * 0.7 + Math.random() * 0.45) * this.fxDur,
-              color: `rgb(${img[i]},${img[i + 1]},${img[i + 2]})`
-            });
-          }
+          const sweep = this.fxDir === 'ltr' ? c / cols : r / rows;
+          const nz = (noise[r * cols + c] - lo) / Math.max(1e-6, hi - lo);
+          cells.push({
+            x: c * cs, y: r * cs, person: img[i + 3] > 40, spawned: false,
+            delay: (sweep * 0.62 + nz * 0.3) * this.fxDur,
+            color: `rgb(${img[i]},${img[i + 1]},${img[i + 2]})`
+          });
         }
       }
+      this.fadeWin = 0.38 * this.fxDur;
       this.cells = cells;
+      this.cols = cols; this.rows = rows;
       LOG('cells:', cells.length);
     }
 
     stepCells() {
       if (!this.cells) return;
       const t = (performance.now() - this.t0) / 1000;
-      const cs = this.cellSize;
-      if (this.state === 'dissolving') {
-        const r = this.rctx;
-        r.save();
-        r.globalCompositeOperation = 'destination-out';
-        r.fillStyle = '#000';
-        for (const c of this.cells) {
-          if (!c.done && t > c.delay) {
-            c.done = true;
-            r.fillRect(c.x, c.y, cs, cs);
-            this.spawnCellParticles(c, 2);
-          }
+      const w = this.out.width, h = this.out.height, cs = this.cellSize;
+      const dissolving = this.state === 'dissolving';
+      const d = this.smallData.data, fw = this.fadeWin;
+      for (let i = 0; i < this.cells.length; i++) {
+        const c = this.cells[i];
+        let p = (t - c.delay) / fw;
+        p = p < 0 ? 0 : p > 1 ? 1 : p;
+        p = p * p * (3 - 2 * p);
+        d[i * 4 + 3] = Math.round(255 * (dissolving ? 1 - p : p));
+        if (!c.spawned && p > 0.12 && c.person) {
+          c.spawned = true;
+          this.spawnCellParticles(c, dissolving ? 2 : 1);
         }
-        r.restore();
-        if (t > 1.5 * this.fxDur) {
+      }
+      this.smallCtx.putImageData(this.smallData, 0, 0);
+      const s = this.softCtx;
+      s.save();
+      const sw = this.soft.width, sh = this.soft.height;
+      s.clearRect(0, 0, sw, sh);
+      s.imageSmoothingEnabled = true;
+      s.imageSmoothingQuality = 'high';
+      s.filter = 'blur(' + Math.max(1, Math.round(cs * 0.7 / 4)) + 'px)';
+      s.drawImage(this.small, 0, 0, sw, sh);
+      s.restore();
+      const r = this.rctx;
+      r.save();
+      r.globalCompositeOperation = 'source-over';
+      r.clearRect(0, 0, w, h);
+      // dissolve: frozen cutout (mask lags the camera); return: LIVE camera
+      // so the person keeps moving while reappearing
+      if (dissolving) r.drawImage(this.person, 0, 0);
+      else r.drawImage(this.video, 0, 0, w, h);
+      r.globalCompositeOperation = 'destination-in';
+      r.imageSmoothingEnabled = true;
+      r.drawImage(this.soft, 0, 0, w, h);
+      r.restore();
+      if (t > 1.4 * this.fxDur) {
+        this.cells = null;
+        if (dissolving) {
           this.state = 'gone';
-          this.cells = null;
-          this.rctx.clearRect(0, 0, this.out.width, this.out.height);
+          this.rctx.clearRect(0, 0, w, h);
           postFx('gone');
-        }
-      } else if (this.state === 'reassembling') {
-        const r = this.rctx;
-        const rv = this.revealCtx;
-        rv.fillStyle = '#fff';
-        for (const c of this.cells) {
-          if (!c.done && t > c.delay) {
-            c.done = true;
-            rv.fillRect(c.x, c.y, cs, cs);
-            if (c.person) this.spawnCellParticles(c, 1);
-          }
-        }
-        // live cutout of the person, clipped to the cells revealed so far
-        // Draw the live camera frame itself (not a mask cutout): the mask lags
-        // the camera by hundreds of ms on CPU, which showed as the returning
-        // person lagging/freezing. The backdrop is static, so the live
-        // background inside revealed cells matches the plate.
-        r.save();
-        r.globalCompositeOperation = 'source-over';
-        r.clearRect(0, 0, this.out.width, this.out.height);
-        r.drawImage(this.video, 0, 0, this.out.width, this.out.height);
-        r.globalCompositeOperation = 'destination-in';
-        r.drawImage(this.reveal, 0, 0);
-        r.restore();
-        if (t > 1.4 * this.fxDur) {
+        } else {
           this.state = 'ready';
-          this.cells = null;
           postFx('ready');
         }
       }
