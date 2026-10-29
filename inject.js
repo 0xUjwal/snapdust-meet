@@ -79,12 +79,12 @@
       this.cellSize = 8;
       // Effect settings (persisted in page localStorage like the gesture flag).
       this.fxDur = 1;            // speed multiplier on effect length
-      this.fxDir = 'head';       // head | ltr | fade
+      this.fxDir = 'streak';     // head | ltr | fade | streak
       try {
         const sd = parseFloat(localStorage.getItem('__sd_dur'));
         if (sd >= 0.5 && sd <= 3) this.fxDur = sd;
         const sr = localStorage.getItem('__sd_dir');
-        if (sr === 'head' || sr === 'ltr' || sr === 'fade') this.fxDir = sr;
+        if (sr === 'head' || sr === 'ltr' || sr === 'fade' || sr === 'streak') this.fxDir = sr;
       } catch (e) {}
       this.particles = [];
       this.flash = null;
@@ -322,7 +322,12 @@
           o.restore();
         } else {
           this.stepCells();
-          o.drawImage(this.remain, 0, 0);
+          if (this.fxDir === 'streak') {
+            o.save();
+            o.filter = 'drop-shadow(0 0 3px rgba(255,236,180,0.85))';
+            o.drawImage(this.remain, 0, 0);
+            o.restore();
+          } else o.drawImage(this.remain, 0, 0);
         }
       }
       // state 'gone': clean background plate only - the person is absent.
@@ -352,6 +357,7 @@
       if (this.fxDir === 'fade') { this.renderPersonCutout(); this.cells = []; return; }
       const w = this.out.width, h = this.out.height, cs = this.cellSize;
       this.renderPersonCutout();
+      if (this.fxDir === 'streak') { this.buildStreak(); return; }
       const img = this.pctx.getImageData(0, 0, w, h).data;
       this.rctx.clearRect(0, 0, w, h);
       const cols = Math.ceil(w / cs), rows = Math.ceil(h / cs);
@@ -412,8 +418,72 @@
       LOG('cells:', cells.length);
     }
 
+    // Streak style: the silhouette breaks into thin vertical lines that
+    // thin out column by column (fast, ~0.5 s), with a soft light edge.
+    // Dissolve eats the frozen cutout; return reveals the LIVE camera.
+    buildStreak() {
+      const w = this.out.width, h = this.out.height;
+      this.rctx.clearRect(0, 0, w, h);
+      const cols = Math.ceil(w / 2), rows = 72;
+      if (!this.small) {
+        this.small = document.createElement('canvas');
+        this.smallCtx = this.small.getContext('2d');
+        this.soft = document.createElement('canvas');
+        this.softCtx = this.soft.getContext('2d');
+      }
+      this.small.width = cols; this.small.height = rows;
+      this.smallData = this.smallCtx.createImageData(cols, rows);
+      const thr = new Float32Array(cols * rows);
+      const colU = new Float32Array(cols);
+      for (let c = 0; c < cols; c++) {
+        // most columns go early, a minority linger as thin streaks
+        const u = Math.random();
+        colU[c] = Math.pow(u, 1.6);
+      }
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          thr[r * cols + c] = 0.04 + 0.55 * colU[c] + 0.18 * (r / rows) + 0.06 * Math.random();
+          const o4 = (r * cols + c) * 4;
+          this.smallData.data[o4] = this.smallData.data[o4 + 1] = this.smallData.data[o4 + 2] = 255;
+        }
+      }
+      this.streakThr = thr;
+      this.cols = cols; this.rows = rows;
+      this.cells = [1];
+    }
+
+    stepStreak() {
+      const w = this.out.width, h = this.out.height;
+      const dissolving = this.state === 'dissolving';
+      const tn = (performance.now() - this.t0) / 1000 / (0.55 * this.fxDur);
+      const d = this.smallData.data, thr = this.streakThr;
+      for (let i = 0; i < thr.length; i++) {
+        let p = (tn - thr[i]) / 0.3;
+        p = p < 0 ? 0 : p > 1 ? 1 : p;
+        p = p * p * (3 - 2 * p);
+        d[i * 4 + 3] = Math.round(255 * (dissolving ? 1 - p : p));
+      }
+      this.smallCtx.putImageData(this.smallData, 0, 0);
+      const r = this.rctx;
+      r.save();
+      r.globalCompositeOperation = 'source-over';
+      r.clearRect(0, 0, w, h);
+      if (dissolving) r.drawImage(this.person, 0, 0);
+      else r.drawImage(this.video, 0, 0, w, h);
+      r.globalCompositeOperation = 'destination-in';
+      r.imageSmoothingEnabled = true;
+      r.drawImage(this.small, 0, 0, w, h);
+      r.restore();
+      if (tn > 1.2) {
+        this.cells = null;
+        if (dissolving) { this.state = 'gone'; r.clearRect(0, 0, w, h); postFx('gone'); }
+        else { this.state = 'ready'; postFx('ready'); }
+      }
+    }
+
     stepCells() {
       if (!this.cells) return;
+      if (this.fxDir === 'streak') { this.stepStreak(); return; }
       const t = (performance.now() - this.t0) / 1000;
       const w = this.out.width, h = this.out.height, cs = this.cellSize;
       const dissolving = this.state === 'dissolving';
@@ -810,7 +880,7 @@
     } else if (d.type === 'snapdust-settings') {
       const dur = Number(d.dur), dir = d.dir;
       if (dur >= 0.5 && dur <= 3) pipeline.fxDur = dur;
-      if (dir === 'head' || dir === 'ltr' || dir === 'fade') pipeline.fxDir = dir;
+      if (dir === 'head' || dir === 'ltr' || dir === 'fade' || dir === 'streak') pipeline.fxDir = dir;
       try { localStorage.setItem('__sd_dur', String(pipeline.fxDur)); localStorage.setItem('__sd_dir', pipeline.fxDir); } catch (e) {}
       post({ type: 'settings-state', dur: pipeline.fxDur, dir: pipeline.fxDir });
     } else if (d.type === 'snapdust-toggle') {

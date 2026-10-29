@@ -264,7 +264,7 @@
     makeSettings();
   }
   let settingsBtn, settingsPanel;
-  let fxDur = 1, fxDir = 'head';
+  let fxDur = 1, fxDir = 'streak';
   function makeSettings() {
     if (settingsBtn) return;
     settingsBtn = document.createElement('button');
@@ -304,7 +304,7 @@
         l.appendChild(sel); row.appendChild(l); return row;
       };
       settingsPanel.appendChild(mk('Speed', 'snapdust-dur', [['0.6', 'fast'], ['1', 'normal'], ['2', 'slow']], fxDur));
-      settingsPanel.appendChild(mk('Style', 'snapdust-dir', [['head', 'dust, head first'], ['ltr', 'dust, left to right'], ['fade', 'fade only (no particles)']], fxDir));
+      settingsPanel.appendChild(mk('Style', 'snapdust-dir', [['head', 'dust, head first'], ['ltr', 'dust, left to right'], ['fade', 'fade only (no particles)'], ['streak', 'streak dissolve (fast, vertical lines)']], fxDir));
       document.documentElement.appendChild(settingsPanel);
     });
     document.documentElement.appendChild(settingsBtn);
